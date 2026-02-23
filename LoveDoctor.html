@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mini Horizon Chase - Deserto (Completo)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { margin: 0; overflow: hidden; background: black; font-family: Arial, sans-serif; }
+    #score {
+      position: absolute;
+      top: 18px; left: 18px;
+      font-size: 20px;
+      font-weight: bold;
+      color: #ffffff;
+      text-shadow: 2px 2px 4px #000;
+      z-index: 20;
+    }
+    #gameOverScreen {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 14px;
+      z-index: 30;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    #gameOverScreen h1 { margin: 0; font-size: 48px; color: #ff4444; text-shadow: 2px 2px 6px #000; }
+    #gameOverScreen p { margin: 0; font-size: 22px; }
+    #gameOverScreen button {
+      padding: 10px 18px;
+      font-size: 18px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: #ff4444;
+      color: white;
+      font-weight: bold;
+    }
+    #gameOverScreen button:hover { filter: brightness(.9); }
+    #scoreHistory { max-height: 220px; overflow:auto; text-align:center; margin-top:8px; display:none; }
+    /* Small hint */
+    #hint {
+      position: absolute;
+      right: 18px;
+      top: 18px;
+      z-index: 20;
+      color: #fff;
+      text-shadow: 1px 1px 2px #000;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div id="score">Pontos: 0</div>
+  <div id="hint">Setas ← → para mover • Espaço buzina</div>
+
+  <div id="gameOverScreen">
+    <h1>GAME OVER</h1>
+    <p id="finalScore">Pontuação: 0</p>
+    <div style="display:flex; gap:10px;">
+      <button onclick="restartGame()">Reiniciar</button>
+      <button onclick="showScores()">Ver Pontuações</button>
+    </div>
+    <div id="scoreHistory"></div>
+  </div>
+
+  <!-- Áudios (coloque os arquivos na mesma pasta: somdefundo.mp3, zap.mp3, carrobate.mp3) -->
+  <audio id="carHorn" src="zap.mp3" preload="auto"></audio>
+  <audio id="bgMusic" src="somdefundo.mp3" preload="auto" loop></audio>
+  <audio id="crashSound" src="carrobate.mp3" preload="auto"></audio>
+
+  <!-- Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+
+  <script>
+    // -----------------------
+    // Variáveis de estado
+    // -----------------------
+    let scoreHistory = [];
+
+    // Cena, câmera, renderer
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // Luzes
+    const hemi = new THREE.HemisphereLight(0xffffcc, 0x331100, 0.9);
+    scene.add(hemi);
+    const sunLight = new THREE.DirectionalLight(0xffddaa, 0.9);
+    sunLight.position.set(50, 80, -100);
+    scene.add(sunLight);
+
+    // -----------------------
+    // CENÁRIO - DESERTO
+    // -----------------------
+    // Céu
+    const skyGeo = new THREE.SphereGeometry(500, 32, 32);
+    const skyMat = new THREE.MeshBasicMaterial({ color: 0xffcc66, side: THREE.BackSide });
+    const sky = new THREE.Mesh(skyGeo, skyMat);
+    scene.add(sky);
+
+    // Sol
+    const sunGeo = new THREE.CircleGeometry(10, 32);
+    const sunMat = new THREE.MeshBasicMaterial({ color: 0xffee88 });
+    const sun = new THREE.Mesh(sunGeo, sunMat);
+    sun.position.set(0, 40, -150);
+    scene.add(sun);
+
+    // Estrada
+    const roadWidth = 12;
+    const roadGeo = new THREE.PlaneGeometry(roadWidth, 400, 1, 40);
+    const roadMat = new THREE.MeshPhongMaterial({ color: 0x333333, side: THREE.DoubleSide });
+    const road = new THREE.Mesh(roadGeo, roadMat);
+    road.rotation.x = -Math.PI/2;
+    road.position.z = -100;
+    scene.add(road);
+
+    // Areia lateral
+    function createSand(x) {
+      const geo = new THREE.PlaneGeometry(50, 400);
+      const mat = new THREE.MeshPhongMaterial({ color: 0xdeb887, side: THREE.DoubleSide });
+      const sand = new THREE.Mesh(geo, mat);
+      sand.rotation.x = -Math.PI/2;
+      sand.position.set(x, 0, -100);
+      scene.add(sand);
+    }
+    createSand(-roadWidth/2 - 25);
+    createSand( roadWidth/2 + 25);
+
+    // Bordas da estrada
+    function createBorder(x) {
+      const borderGeo = new THREE.BoxGeometry(1.2, 0.3, 400);
+      const borderMat = new THREE.MeshPhongMaterial({ color: 0xaaaa88 });
+      const border = new THREE.Mesh(borderGeo, borderMat);
+      border.position.set(x, 0.15, -100);
+      scene.add(border);
+    }
+    createBorder(-roadWidth/2 - 0.6);
+    createBorder( roadWidth/2 + 0.6);
+
+    // Faixas brancas
+    const stripes = [];
+    function createStripe(z) {
+      const stripeGeo = new THREE.PlaneGeometry(0.5, 4);
+      const stripeMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+      stripe.rotation.x = -Math.PI/2;
+      stripe.position.set(0, 0.01, z);
+      scene.add(stripe);
+      stripes.push(stripe);
+    }
+    for (let i = 0; i < 30; i++) createStripe(-i * 10);
+
+    // Cactos & rochas
+    const cactos = [];
+    function createCactus(z) {
+      const cactus = new THREE.Group();
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4,0.5,4), new THREE.MeshPhongMaterial({ color: 0x2e8b57 }));
+      trunk.position.y = 2;
+      cactus.add(trunk);
+      const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.28,2), new THREE.MeshPhongMaterial({ color: 0x2e8b57 }));
+      arm1.rotation.z = Math.PI/2;
+      arm1.position.set(0.6, 2.6, 0);
+      cactus.add(arm1);
+      const arm2 = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.28,2), new THREE.MeshPhongMaterial({ color: 0x2e8b57 }));
+      arm2.rotation.z = Math.PI/2;
+      arm2.position.set(-0.6, 1.9, 0);
+      cactus.add(arm2);
+      const side = Math.random() < 0.5 ? -1 : 1;
+      cactus.position.set(side * (roadWidth/2 + 8 + Math.random()*14), 0, z);
+      scene.add(cactus);
+      cactos.push(cactus);
+    }
+    for (let i=0;i<12;i++) createCactus(-i*40-20);
+
+    const rocks = [];
+    function createRock(z) {
+      const geo = new THREE.DodecahedronGeometry(1 + Math.random()*1.6);
+      const mat = new THREE.MeshPhongMaterial({ color: 0x8b7355, flatShading:true });
+      const rock = new THREE.Mesh(geo, mat);
+      const side = Math.random()<0.5 ? -1:1;
+      rock.position.set(side * (roadWidth/2 + 5 + Math.random()*20), 0.5, z);
+      scene.add(rock);
+      rocks.push(rock);
+    }
+    for (let i=0;i<16;i++) createRock(-i*30-30);
+
+    // -----------------------
+    // CARRO DO JOGADOR (simplificado)
+    // -----------------------
+    const car = new THREE.Group();
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.4,0.6,4.2), new THREE.MeshPhongMaterial({ color: 0x3366cc, flatShading:true }));
+    body.position.y = 0.6; car.add(body);
+
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.4,1.2), new THREE.MeshPhongMaterial({ color:0x3366cc }));
+    hood.position.set(0,0.55,-1.8); car.add(hood);
+
+    const trunk = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.4,1.2), new THREE.MeshPhongMaterial({ color:0x3366cc }));
+    trunk.position.set(0,0.55,1.8); car.add(trunk);
+
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.8,2.2), new THREE.MeshPhongMaterial({ color:0x111111, transparent:true, opacity:0.75 }));
+    cabin.position.set(0,1.0,0); car.add(cabin);
+
+    function addHeadlight(x,z) {
+      const light = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.15,0.1,12), new THREE.MeshPhongMaterial({ color:0xffffcc, emissive:0xffff33 }));
+      light.rotation.x = Math.PI/2; light.position.set(x,0.65,z); car.add(light);
+    }
+    addHeadlight(-0.7,-2.1); addHeadlight(0.7,-2.1);
+
+    function addTaillight(x,z) {
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.15,0.1,12), new THREE.MeshPhongMaterial({ color:0xff2222, emissive:0xaa0000 }));
+      t.rotation.x = Math.PI/2; t.position.set(x,0.65,z); car.add(t);
+    }
+    addTaillight(-0.7,2.1); addTaillight(0.7,2.1);
+
+    const wheelGeo = new THREE.CylinderGeometry(0.5,0.5,0.4,16);
+    function addWheel(x,z) {
+      const tire = new THREE.Mesh(wheelGeo, new THREE.MeshPhongMaterial({ color:0x111111 }));
+      tire.rotation.z = Math.PI/2; tire.position.set(x,0.25,z); car.add(tire);
+    }
+    addWheel(-1.2,1.7); addWheel(1.2,1.7); addWheel(-1.2,-1.7); addWheel(1.2,-1.7);
+
+    car.position.set(0,0,5);
+    scene.add(car);
+
+    // -----------------------
+    // NPC (inimigos) - carros simples
+    // -----------------------
+    let obstacles = [];
+    function createNpcCar() {
+      const npc = new THREE.Group();
+      const colors = [0xffffff,0xffeecc,0xccddff,0xffccdd,0xddeeff];
+      const npcColor = colors[Math.floor(Math.random()*colors.length)];
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.6,3.8), new THREE.MeshPhongMaterial({ color: npcColor, flatShading:true }));
+      body.position.y = 0.6; npc.add(body);
+      const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.7,1.8), new THREE.MeshPhongMaterial({ color:0x333333, transparent:true, opacity:0.7 }));
+      cabin.position.set(0,1.0,0); npc.add(cabin);
+
+      const wheelGeo2 = new THREE.CylinderGeometry(0.45,0.45,0.35,16);
+      function addWheel2(x,z) {
+        const tire = new THREE.Mesh(wheelGeo2, new THREE.MeshPhongMaterial({ color:0x111111 }));
+        tire.rotation.z = Math.PI/2; tire.position.set(x,0.25,z); npc.add(tire);
+      }
+      addWheel2(-1.05,1.4); addWheel2(1.05,1.4); addWheel2(-1.05,-1.4); addWheel2(1.05,-1.4);
+
+      npc.position.set((Math.random()-0.5) * roadWidth * 0.7, 0, -120 - Math.random()*60);
+      scene.add(npc);
+      obstacles.push(npc);
+    }
+
+    // -----------------------
+    // Áudio controles
+    // -----------------------
+    const horn = document.getElementById('carHorn');
+    const bgMusic = document.getElementById('bgMusic');
+    const crashSound = document.getElementById('crashSound');
+
+    // tentativa de tocar música (pode ser bloqueada por autoplay do browser)
+    bgMusic.volume = 0.45;
+    // play tentativo — o usuário pode precisar interagir primeiro
+    const tryPlayMusic = () => {
+      bgMusic.play().catch(()=>{/* autoplay bloqueado, tocará quando usuário interagir */});
+    };
+    tryPlayMusic();
+
+    // -----------------------
+    // Controles
+    // -----------------------
+    let left = false, right = false;
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') left = true;
+      if (e.key === 'ArrowRight') right = true;
+      if (e.code === 'Space') {
+        // buzina
+        horn.currentTime = 0;
+        horn.play();
+        // se música preservou pausa, tenta tocar
+        tryPlayMusic();
+      }
+      // se o BG estiver pausado devido ao game over, tocar após interação
+      if (bgMusic.paused && !gameOver) tryPlayMusic();
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'ArrowLeft') left = false;
+      if (e.key === 'ArrowRight') right = false;
+    });
+
+    // -----------------------
+    // Lógica do jogo
+    // -----------------------
+    let speed = 0.45;
+    let points = 0;
+    let velX = 0;
+    let gameOver = false;
+
+    // Initialize camera
+    camera.position.set(0, 4, 10);
+    camera.lookAt(0, 0, -20);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (gameOver) {
+        renderer.render(scene, camera);
+        return;
+      }
+
+      // Car lateral
+      if (left) velX -= 0.055;
+      if (right) velX += 0.055;
+      velX *= 0.92;
+      car.position.x += velX;
+      car.rotation.z = -velX * 0.4;
+
+      // limites da estrada
+      if (car.position.x < -roadWidth/2 + 1.5) car.position.x = -roadWidth/2 + 1.5;
+      if (car.position.x > roadWidth/2 - 1.5) car.position.x = roadWidth/2 - 1.5;
+
+      // Estrada infinita
+      road.position.z += speed * 2;
+      if (road.position.z > 0) road.position.z = -100;
+
+      // Movimento faixas
+      stripes.forEach(s => {
+        s.position.z += speed * 2;
+        if (s.position.z > 10) s.position.z = -200;
+      });
+
+      // Move cactos e rochas (efeito de passar)
+      cactos.forEach(c => {
+        c.position.z += speed * 0.8;
+        if (c.position.z > 20) {
+          c.position.z = -300 - Math.random()*100;
+          const side = Math.random() < 0.5 ? -1 : 1;
+          c.position.x = side * (roadWidth/2 + 8 + Math.random()*14);
+        }
+      });
+
+      rocks.forEach(r => {
+        r.position.z += speed * 0.7;
+        if (r.position.z > 20) {
+          r.position.z = -200 - Math.random()*100;
+          const side = Math.random() < 0.5 ? -1 : 1;
+          r.position.x = side * (roadWidth/2 + 5 + Math.random()*20);
+        }
+      });
+
+      // criar inimigos aleatoriamente (taxa aumenta com pontos)
+      const spawnProb = 0.015 + Math.min(points * 0.0002, 0.025);
+      if (Math.random() < spawnProb) createNpcCar();
+
+      // mover inimigos e checar se passaram (pontuar)
+      obstacles.forEach(o => { o.position.z += speed * 2; });
+      obstacles = obstacles.filter(o => {
+        if (o.position.z > 8) {
+          scene.remove(o);
+          points++;
+          document.getElementById('score').innerText = 'Pontos: ' + points;
+          return false;
+        }
+        return true;
+      });
+
+      // colisões
+      const carBox = new THREE.Box3().setFromObject(car);
+      for (let i = 0; i < obstacles.length; i++) {
+        const o = obstacles[i];
+        const npcBox = new THREE.Box3().setFromObject(o);
+        if (carBox.intersectsBox(npcBox)) {
+          // colisão ocorreu
+          speed = 0;
+          gameOver = true;
+          crashSound.currentTime = 0;
+          crashSound.play();
+          bgMusic.pause();
+
+          scoreHistory.push(points);
+          document.getElementById('gameOverScreen').style.display = 'flex';
+          document.getElementById('finalScore').innerText = 'Pontuação: ' + points;
+          break;
+        }
+      }
+
+      // aumenta gradualmente velocidade até um teto
+      speed += 0.00012;
+      if (speed > 1.6) speed = 1.6;
+
+      // câmera segue o carro
+      camera.position.set(car.position.x, 4, car.position.z + 8);
+      camera.lookAt(car.position.x, 0, car.position.z - 6);
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // -----------------------
+    // UI functions
+    // -----------------------
+    function restartGame() {
+      // recarrega a página para reiniciar tudo de forma simples
+      location.reload();
+    }
+    function showScores() {
+      const historyDiv = document.getElementById('scoreHistory');
+      if (scoreHistory.length === 0) historyDiv.innerHTML = '<em>Nenhuma pontuação anterior.</em>';
+      else historyDiv.innerHTML = '<strong>Histórico:</strong><br>' + scoreHistory.slice().reverse().join('<br>');
+      historyDiv.style.display = 'block';
+    }
+
+    // para tocar música após primeira interação se autoplay bloqueou
+    document.addEventListener('click', tryPlayMusic, { once:true });
+    document.addEventListener('keydown', tryPlayMusic, { once:true });
+
+  </script>
+</body>
+</html>
